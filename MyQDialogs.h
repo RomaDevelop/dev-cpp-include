@@ -1005,50 +1005,51 @@ MyQDialogs::TableDialogRes MyQDialogs::TableOneCol(const QString &caption, QStri
 
 void MyQDialogs::InfoBar(const QString &message, QWidget *widgetToShowIn)
 {
-	auto widget = new QWidget(widgetToShowIn);
-	widget->setAttribute(Qt::WA_DeleteOnClose);
-	widget->setStyleSheet("background-color: #e0f7fa; border: 1px solid #00acc1; padding: 5px;");
+	auto widgetBar = new QWidget(widgetToShowIn);
+	widgetBar->setStyleSheet("background-color: #e0f7fa; border: 1px solid #00acc1;");
 
-	QHBoxLayout *hloMain = new QHBoxLayout(widget);
-	hloMain->setContentsMargins(10, 1, 10, 1);
-	hloMain->setSpacing(10);
+	QHBoxLayout *hloInBar = new QHBoxLayout(widgetBar);
+
+	QLabel *label = new QLabel(message);
+	auto defaultFont = label->font();
+	hloInBar->addWidget(label, 1);
+	label->setWordWrap(true);
+	label->setStyleSheet("border: none;"); // для подавления border-а в widgetBar
+
+	hloInBar->addStretch();
 
 	QVBoxLayout *vloClose = new QVBoxLayout;
-	vloClose->setContentsMargins(0,10,0,0);
-
-	QLabel *label = new QLabel(message, widgetToShowIn);
-	label->setWordWrap(true);
-	label->setStyleSheet("border: none;");
+	hloInBar->addLayout(vloClose);
+	vloClose->setContentsMargins(0,0,0,0);
 
 	QPushButton *closeButton = new QPushButton("×");
+	vloClose->addWidget(closeButton, 0, Qt::AlignTop);
 	closeButton->setFixedSize(20, 20);
 	closeButton->setStyleSheet("QPushButton { background-color: #00acc1; color: white; border-radius: 10px; }"
 							   "QPushButton:hover { background-color: #00838f; }");
-	QObject::connect(closeButton, &QPushButton::clicked, widget, [widget](){ widget->close(); widget->deleteLater(); });
+	QObject::connect(closeButton, &QPushButton::clicked, widgetBar, [widgetBar](){ widgetBar->deleteLater(); });
 
-	hloMain->addWidget(label, 1);
-	hloMain->addStretch();
-	hloMain->addLayout(vloClose);
-	vloClose->addWidget(closeButton, 0, Qt::AlignTop);
+	// хранилище создаваемых виджетов
+	static std::map<QWidget*, std::vector<QWidget*>> barsInWidgets;
 
-	auto widgetSA = dynamic_cast<QAbstractScrollArea*>(widgetToShowIn);
-	if(widgetSA) hloMain->addSpacing(widgetSA->verticalScrollBar()->width());
+	/// С координатами логика похожая на QVBoxLayout.
+	/// Костыль необходим, потому что нельзя добавлять в widgetToShowIn новый лейаут, вдруг в нем уже есть,
+	/// Qt не поддерживает добавление нескольких лэйаутов слоями.
+	/// Другой вариант - создание прозрачного виджета поверх widgetToShowIn тоже плох,
+	/// нужно делать его прозрачным для кликов, а его дочерние непрозрачным, а это тоже все не так просто.
 
-	// хранилище
-	static std::map<QWidget *, std::vector<QWidget*>> barsInWidgets;
-
-	// расчет координаты y исходя из последнего бара в этом виджете
+	// расчет координаты исходя из последнего бара в этом виджете
 	int y = 0;
 	auto findRes = barsInWidgets.find(widgetToShowIn);
 	if(findRes != barsInWidgets.end())
 		y = findRes->second.back()->y()+findRes->second.back()->height();
 
 	// вставка этого бара в хранилище и обработчик его удаления
-	barsInWidgets[widgetToShowIn].push_back(widget);
-	QObject::connect(widget, &QObject::destroyed, widget, [widgetToShowIn, widget](){
+	barsInWidgets[widgetToShowIn].push_back(widgetBar);
+	QObject::connect(widgetBar, &QObject::destroyed, widgetBar, [widgetToShowIn, widgetBar](){
 		auto &barsVect = barsInWidgets[widgetToShowIn];
 		for(uint i=0; i<barsVect.size(); i++)
-			if(barsVect[i] == widget)
+			if(barsVect[i] == widgetBar)
 				barsVect.erase(barsVect.begin()+i);
 		if(barsVect.empty()) barsInWidgets.erase(widgetToShowIn);
 		else
@@ -1063,9 +1064,17 @@ void MyQDialogs::InfoBar(const QString &message, QWidget *widgetToShowIn)
 		}
 	});
 
-	widget->show(); // обязательно до resize иначе показывается криво
-	widget->move(0, y);
-	widget->resize(widgetToShowIn->width(), widget->height());
+	widgetBar->show(); // обязательно до resize иначе показывается криво
+	widgetBar->move(0, y);
+	QTimer::singleShot(0, [widgetToShowIn, widgetBar, hloInBar, label, defaultFont](){
+		label->setFont(defaultFont);
+
+		auto widgetSA = dynamic_cast<QAbstractScrollArea*>(widgetToShowIn);
+		if(widgetSA and widgetSA->verticalScrollBar()->isVisible())
+			hloInBar->addSpacing(widgetSA->verticalScrollBar()->width());
+
+		widgetBar->resize(widgetToShowIn->width(), widgetBar->heightForWidth(widgetToShowIn->width()));
+	});
 }
 
 void MyQDialogs::ToastMessage(QString caption, QString text, MyQDialogs::ToastPos pos, int duration)
