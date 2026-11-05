@@ -40,6 +40,49 @@ namespace stdx
 		CodeMarkers::to_do_with_cpp20("проверку has_find<T, M>::value можно сделать еще проще, через requires");
 	}
 
+	template<class Range, class Key>
+	auto find_value_by_key(Range& range, const Key& key)
+	{
+		using ReturnPtr = decltype(&(range.begin()->second));
+		// Если у контейнера есть метод find, используем его
+		if constexpr (has_find<Range>::value)
+		{
+			auto it = range.find(key);
+			if (it != range.end()) return &(it->second);
+			return ReturnPtr{nullptr};
+		}
+		else // Иначе — линейный перебор (предполагаем, что элементы имеют .first и .second)
+		{
+			for (auto& item : range)
+				if (smart_compare(item.first, key))
+					return &(item.second);
+			return ReturnPtr{nullptr};
+		}
+	}
+
+	// Перегрузка для const контейнера, чтобы возвращать неизменяемый указатель
+	template<class Range, class Key>
+	auto find_value_by_key(const Range& range, const Key& key)
+	{
+		using ReturnPtr = decltype(&(range.begin()->second));
+		// Если у контейнера есть метод find, используем его
+		if constexpr (has_find<Range>::value)
+		{
+			auto it = range.find(key);
+			if (it != range.end()) return &(it->second);
+			return ReturnPtr{nullptr};
+		}
+		else // Иначе — линейный перебор (предполагаем, что элементы имеют .first и .second)
+		{
+			for (auto& item : range)
+				if (smart_compare(item.first, key))
+					return &(item.second);
+			return ReturnPtr{nullptr};
+		}
+
+		CodeMarkers::to_do_with_cpp20("проверку has_find<T, M>::value можно сделать еще проще, через requires");
+	}
+
 	/// idiom remove - erase
 	template<class Container, class Value>
 	void remove_erase(Container& container, const Value& value)
