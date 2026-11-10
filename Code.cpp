@@ -5,7 +5,43 @@
 #include "MyCppDifferent.h"
 #include "MyQDialogs.h"
 
+#include "stdx.h"
+
 namespace ckw = CodeKeyWords;
+
+namespace {
+	using namespace CodeKeyWords;
+
+	const auto charsToSurroundSpaces = stdx::flat_stack_set<QChar, 32>::from_args(
+		comma, dot, colon, ';',
+
+		'(', ')',  '[', ']', '{', '}',
+
+		'=', '+', '-', '*', '/', '%',
+
+		'~',
+
+		'>', '<', '!', '|', '&'
+	);
+
+	const std::array<std::pair<QChar, QChar>, 16> charsToRemoveSpacesBetween {
+		// массив пар, а не мапа, поскольку гипотетически ключ может повторяться
+			  std::make_pair('=','=')
+			, std::make_pair('!','=')
+			, std::make_pair('>','=')
+			, std::make_pair('<','=')
+
+			, std::make_pair('+','=')
+			, std::make_pair('-','=')
+			, std::make_pair('*','=')
+			, std::make_pair('/','=')
+
+			, std::make_pair('/','/')  // двойной слеш (комментарий)
+
+			, std::make_pair('&','&')
+			, std::make_pair('|','|')
+			};
+}
 
 void Code::Normalize(QString &text)
 {
@@ -28,11 +64,7 @@ void Code::Normalize(QString &text)
 				continue;
 			}
 
-			using namespace CodeKeyWords;
-			static const std::set<QChar> charsToSurroundSpaces { comma, dot, colon, ';',
-						'(', ')',  '[', ']', '{', '}',
-						'=', '+', '-', '*', '/', '%',      '~',     '>', '<', '!'};
-			if(charsToSurroundSpaces.count(currentChar) > 0)
+			if(charsToSurroundSpaces.contains(currentChar))
 			{
 				if(i != text.length()-1 && text[i+1] != ' ') text.insert(i+1,' ');
 				if(i != 0 && text[i-1] != ' ') text.insert(i,' ');
@@ -71,17 +103,8 @@ void Code::Normalize(QString &text)
 			}
 			else
 			{
-				if(text[i-1] == '=' && text[i+1] == '=') { text.remove(i,1); i--; continue; }
-				if(text[i-1] == '!' && text[i+1] == '=') { text.remove(i,1); i--; continue; }
-				if(text[i-1] == '>' && text[i+1] == '=') { text.remove(i,1); i--; continue; }
-				if(text[i-1] == '<' && text[i+1] == '=') { text.remove(i,1); i--; continue; }
-
-				if(text[i-1] == '+' && text[i+1] == '=') { text.remove(i,1); i--; continue; }
-				if(text[i-1] == '-' && text[i+1] == '=') { text.remove(i,1); i--; continue; }
-				if(text[i-1] == '*' && text[i+1] == '=') { text.remove(i,1); i--; continue; }
-				if(text[i-1] == '/' && text[i+1] == '=') { text.remove(i,1); i--; continue; }
-
-				if(text[i-1] == '/' && text[i+1] == '/') { text.remove(i,1); i--; continue; } // двойной слеш (комментарий)
+				auto findResCharPtr = stdx::find_value_by_key(charsToRemoveSpacesBetween, text[i-1]);
+				if(findResCharPtr and text[i+1] == *findResCharPtr) { text.remove(i,1); i--; continue; }
 			}
 		}
 	}
