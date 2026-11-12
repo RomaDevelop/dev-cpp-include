@@ -2,6 +2,7 @@
 #define MYQEXCEL_H
 
 #include <vector>
+#include <memory>
 
 #include <QDebug>
 #include <QAxObject>
@@ -9,106 +10,158 @@
 
 #include "MyQShortings.h"
 
-class IExcelSheet
+using QAxObjectUptr = std::unique_ptr<QAxObject>;
+
+struct MyQExcelRows
+{
+	std::vector<QStringList> data;
+	QString ToString();
+};
+
+class ISheet
 {
 public:
-	virtual ~IExcelSheet() = default;
+	virtual ~ISheet() = default;
 
 	virtual QString Name() const = 0;
-	/// col, row нумерация с 1
+	/// col, row нумерация с 0
 	virtual QString Cell(int col, int row) const = 0;
-	/// col, row нумерация с 1
+	/// col, row нумерация с 0
 	virtual void SetCell(int col, int row, const QString &value) = 0;
-	virtual void AllRows(std::vector<QStringList> &rows) const = 0;
-	virtual QString AllRows() const = 0;
+
+	using Rows = MyQExcelRows;
+
+	virtual Rows Range(const QRect &rect) const = 0;
+	virtual Rows RangeAllSheet() const = 0;
 
 	virtual void ClearContentsSheet() = 0;
 
-	static QString EndCell() { return "[endCell]"; }
-	static QString EndRow()	{ return "[endRow]"; }
-	static QString EndSheetName(){ return "[endSheetName]"; }
-	static QString EndSheet(){ return "[endSheet]"; }
+	inline static QString EndCell = QStringLiteral("[endCell]");
+	inline static QString EndRow = QStringLiteral("[endRow]");
+	inline static QString EndSheetName = QStringLiteral("[endSheetName]");
+	inline static QString EndSheet = QStringLiteral("[endSheet]");
 };
 
-class ExcelSheet: public IExcelSheet
+class IWorkbook
 {
-	QAxObject* sheet;
+public:
+	using ErrorWorker = std::function<void(const QString &text)>;
+
+	IWorkbook(ErrorWorker errorWorker): errorWorker{std::move(errorWorker)} {}
+	virtual ~IWorkbook() = default;
+
+	virtual ISheet* Sheet(int index) const = 0;
+	virtual int SheetCount() const = 0;
+	virtual QString ToStr() const = 0;
+
+
+	ErrorWorker errorWorker;
+	void Error(const QString &text) const
+	{
+		if(errorWorker) errorWorker(text);
+		else
+		{
+			qdbg << "IWorkbook::ErrorWorker is null";
+			qdbg << "Error:" << text;
+		}
+	}
+};
+
+class ExcelSheet: public ISheet
+{
+	IWorkbook &parent;
+	QAxObject &sheet;
 
 public:
-	ExcelSheet(QAxObject* sheet): sheet{sheet} {}
-	void Init(QAxObject* sheet) { this->sheet = sheet; }
+	ExcelSheet(QAxObject &aSheet, IWorkbook &parent);
 
 	virtual ~ExcelSheet() override = default;
 
-	virtual QString Name() const override { return sheet->property("Name").toString(); }
-	/// col, row нумерация с 1
-	virtual QString Cell(int col, int row) const override { return sheet->querySubObject("Cells(int,int)", row, col)->property("Value").toString(); }
-	/// col, row нумерация с 1
-	virtual void SetCell(int col, int row, const QString &value) override { sheet->querySubObject("Cells(int,int)", row, col)->setProperty("Value",value); }
-	virtual void AllRows(std::vector<QStringList> &rows) const override;
-	virtual QString AllRows() const override;
+	virtual QString Name() const override { return sheet.property("Name").toString(); }
+
+	/// возвращает размер от ячейки 0:0 до max:max
+	QSize Size() const;
+
+	/// col, row нумерация с 0
+	virtual QString Cell(int col, int row) const override;
+	/// col, row нумерация с 0
+	virtual void SetCell(int col, int row, const QString &value) override;
+
+	virtual Rows Range(const QRect &rect) const override;
+	virtual Rows RangeAllSheet() const override;
 
 	void ClearContentsSheet() override;
 };
 
-class ExcelQStringSheet: public IExcelSheet
+class QStringsSheet: public ISheet
 {
 	QString name;
 	std::vector<QStringList> rows;
 
 public:
-	ExcelQStringSheet(const QString &sheet) { Init(sheet); }
+	QStringsSheet(const QString &sheet) { Init(sheet); }
 	void Init(const QString &sheet);
 
-	virtual ~ExcelQStringSheet() override { };
+	virtual ~QStringsSheet() override { };
 
 	QString Name() const override { return name; }
-	/// col, row нумерация с 1
+	/// col, row нумерация с 0
 	QString Cell(int col, int row) const override;
-	/// col, row нумерация с 1
-	void SetCell(int col, int row, const QString &value) override { rows[row-1][col-1] = value; }
-	void AllRows(std::vector<QStringList> &rows_) const override { rows_ = rows; }
-	QString AllRows() const override;
+	/// col, row нумерация с 0
+	void SetCell(int col, int row, const QString &value) override { rows[row][col] = value; }
+
+	virtual Rows Range(const QRect &/*rect*/) const override { throw std::logic_error("QStringsSheet Range"); }
+	virtual Rows RangeAllSheet() const override { throw std::logic_error("QStringsSheet RangeAllSheet"); }
 };
 
-class IExcelWorkbook
+class ExcelWorkbook: public IWorkbook
 {
-public:
-	virtual ~IExcelWorkbook() = default;
+	// Объект экселя. Если не пут - значит книга открыта.
+	QAxObjectUptr excel_uptr {};
+	QAxObject* workbook {}; // будет залет за счёт parent-а excel_uptr
+	std::vector<std::unique_ptr<ExcelSheet>> sheets;
 
-	virtual IExcelSheet* Sheet(int index) const = 0;
-	virtual int SheetCount() const = 0;
-	virtual QString ToStr() const = 0;
-};
-
-class ExcelWorkbook: public IExcelWorkbook
-{
-	QAxObject* excel {nullptr};
-	QAxObject* workbooks {nullptr};
-	QAxObject* wb {nullptr};
-	bool opened{false};
-	bool readOnly{false};
-	std::vector<IExcelSheet*> sheets;
+	void ClearFields()
+	{
+		sheets.clear();
+		workbook = {};
+		excel_uptr = {};
+	}
 
 public:
-	ExcelWorkbook();
-	ExcelWorkbook(QString file);
+
+	explicit ExcelWorkbook(ErrorWorker errorWorker);
+	explicit ExcelWorkbook(QString file, ErrorWorker errorWorker);
 	~ExcelWorkbook() override;
-	bool Open(QString file);
-	void Save();
-	void CloseNoSave();
-	IExcelSheet* Sheet(int index) const override;
-	int SheetCount() const override { return wb->querySubObject("Worksheets")->property("Count").toInt(); }
+
+	ExcelWorkbook(const ExcelWorkbook &) = delete;
+	ExcelWorkbook(ExcelWorkbook &&) = delete;
+	ExcelWorkbook& operator = (const ExcelWorkbook &) = delete;
+	ExcelWorkbook& operator = (ExcelWorkbook &&) = delete;
+
+	// Возвращает ошибку если была
+	QString Open(QString file);
+	bool IsOpened() { return bool(excel_uptr); }
+
+	QString Save();
+
+	QString CloseNoSave();
+
+	ISheet* Sheet(int index) const override;
+	int SheetCount() const override { return sheets.size(); }
 	QString ToStr() const override ;
 };
 
-class ExcelQStringWorkbook: public IExcelWorkbook
+class ExcelQStringWorkbook: public IWorkbook
 {
-	std::vector<ExcelQStringSheet> sheets;
-	std::vector<IExcelSheet*> sheetsPt;
+	std::vector<QStringsSheet> sheets;
+	std::vector<ISheet*> sheetsPt;
 
 public:
-	IExcelSheet* Sheet(int number) const override;
+
+	explicit ExcelQStringWorkbook(ErrorWorker errorWorker);
+
+	ISheet* Sheet(int number) const override;
 	int SheetCount() const override { return sheets.size(); }
 	QString ToStr() const override;
 	void FromStr(const QString &workBookAsStr);
@@ -116,7 +169,7 @@ public:
 
 class MyQExcelHasher
 {
-	IExcelWorkbook *wbPt {nullptr};
+	IWorkbook *wbPt {nullptr};
 	QString *labelForMsgs = nullptr;
 
 	static QString GetFileName(int fileIndex);
@@ -126,7 +179,7 @@ class MyQExcelHasher
 public:
 	~MyQExcelHasher() { if(wbPt) delete wbPt; }
 
-	IExcelWorkbook* Get() { return wbPt; }
+	IWorkbook* Get() { return wbPt; }
 
 	int InitFile(QString directory, QString fileName);
 
@@ -136,7 +189,8 @@ public:
 		if(labelForMsgs) *labelForMsgs = str;
 	}
 
-	enum errors {noError, unknown, cantCrDir, cantOpenExcelFile, cantOpenFileHashes, cantOpenFileHash, cantOpenFileNew, cantOpenNewFileHash};
+	enum errors { noError, unknown, cantCrDir, cantOpenExcelFile, cantOpenFileHashes, cantOpenFileHash,
+				  cantOpenFileNew, cantOpenNewFileHash };
 	static QString ErrCodeToStr(int errCode);
 };
 

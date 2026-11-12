@@ -8,126 +8,245 @@
 #include "MyQShortings.h"
 #include "MyQByteArray.h"
 
-
-void ExcelSheet::AllRows(std::vector<QStringList> &rows) const
+struct axuptr
 {
-	int countRows = sheet->querySubObject("UsedRange")->querySubObject("Rows")->property("Count").toInt();
-	int countCols = sheet->querySubObject("UsedRange")->querySubObject("Columns")->property("Count").toInt();
+	QAxObjectUptr uptr;
 
-	rows.resize(countRows);
+	axuptr() noexcept = default;
+	axuptr(std::nullptr_t) noexcept {}
+	axuptr(QAxObject* ptr) noexcept : uptr(ptr) {}
 
-	for(int r=1; r<=countRows; r++)
-	{
-		rows[r-1].clear();
-		for(int c=1; c<=countCols; c++)
-		{
-			rows[r-1] += Cell(c,r);
-		}
-	}
-}
+	// Разрешаем только перемещение, запрещаем случайное копирование
+	axuptr(axuptr&&) noexcept = default;
+	axuptr& operator=(axuptr&&) noexcept = default;
+	axuptr(const axuptr&) = delete;
+	axuptr& operator=(const axuptr&) = delete;
 
-QString ExcelSheet::AllRows() const
+	// Безопасное приведение к bool (защита от неявного каста в int)
+	explicit operator bool() const noexcept { return static_cast<bool>(uptr); }
+
+	QAxObject* operator->() const noexcept { return uptr.get(); }
+	QAxObject& operator*() const noexcept { return *uptr; }
+
+	// Удобный доступ к сырому указателю (например, для передачи в dynamicCall)
+	QAxObject* get() const noexcept { return uptr.get(); }
+	operator QAxObject*() const noexcept { return uptr.get(); }
+};
+
+QString MyQExcelRows::ToString()
 {
-	int countRows = sheet->querySubObject("UsedRange")->querySubObject("Rows")->property("Count").toInt();
-	int countCols = sheet->querySubObject("UsedRange")->querySubObject("Columns")->property("Count").toInt();
-
 	QString ret;
 
-	for(int r=1; r<=countRows; r++)
+	for(uint r=0; r<data.size(); r++)
 	{
-		for(int c=1; c<=countCols; c++)
+		for(int c=0; c<data[r].size(); c++)
 		{
-			ret += Cell(c,r) + EndCell();
+			ret += data[r][c] + ISheet::EndCell;
 		}
-		ret += EndRow();
+		ret += ISheet::EndRow;
 	}
 
 	return ret;
 }
 
+
+// Преобразует координаты с нуля (x - колонка, y - строка) в адрес ячейки Excel (например, 0, 0 -> "A1")
+QString GetExcelAddr(int x, int y) {
+	QString colStr;
+	int col = x + 1; // Переводим в 1-базную систему Excel
+	while (col > 0) {
+		colStr.prepend(QChar('A' + (col - 1) % 26));
+		col = (col - 1) / 26;
+	}
+	return colStr + QString::number(y + 1);
+}
+
+ExcelSheet::ExcelSheet(QAxObject &aSheet, IWorkbook &parent):
+	parent{parent},
+	sheet{aSheet}
+{
+
+}
+
+QSize ExcelSheet::Size() const
+{
+	QSize size;
+
+	axuptr usedRange = sheet.querySubObject("UsedRange");
+	if(not usedRange)
+	{
+		parent.Error("null usedRange");
+		return size;
+	}
+
+	int firstRow = usedRange->property("Row").toInt();
+	int firstCol = usedRange->property("Column").toInt();
+
+	axuptr rows = usedRange->querySubObject("Rows");
+	axuptr cols = usedRange->querySubObject("Columns");
+
+	if (rows && cols) {
+		size.setHeight(firstRow + rows->property("Count").toInt() - 1);
+		size.setWidth(firstCol + cols->property("Count").toInt() - 1);
+	}
+	else parent.Error("null rows || cols");
+
+	return size;
+}
+
+QString ExcelSheet::Cell(int col, int row) const
+{
+	axuptr cell = sheet.querySubObject("Cells(int,int)", row+1, col+1);
+
+	if(!cell) { parent.Error("null cell"); return ""; }
+
+	return cell->property("Value").toString();
+}
+
+void ExcelSheet::SetCell(int col, int row, const QString &value)
+{
+	axuptr cell = sheet.querySubObject("Cells(int,int)", row+1, col+1);
+
+	if(!cell) { parent.Error("null cell"); return; }
+
+	cell->setProperty("Value",value);
+}
+
+ExcelSheet::Rows ExcelSheet::Range(const QRect &rect) const
+{
+	QString addr = GetExcelAddr(rect.x(), rect.y()) + ":" + GetExcelAddr(rect.x()+rect.width(), rect.y()+rect.height());
+
+	axuptr range = sheet.querySubObject("Range(const QString&)", addr);
+	if (!range) { parent.Error("null range"); return {}; }
+
+	// 2. Забираем все данные одним вызовом
+	QVariant var = range->property("Value2");
+
+	Rows rows1;
+
+	// 3. Разбираем результат
+	// Если диапазон состоял из 1 ячейки (x1 == x2 && y1 == y2), вернется одиночный QVariant, а не список
+	if (var.userType() != QMetaType::QVariantList) {
+		auto &row = rows1.data.emplace_back();
+		row.push_back(var.toString());
+	}
+	// Если диапазон состоял из более 1 ячейки
+	else
+	{
+		QVariantList varsList = var.toList();
+		for (int r = 0; r < varsList.size(); ++r) {
+			QVariantList cols = varsList[r].toList();
+			auto &row = rows1.data.emplace_back();
+			for (int c = 0; c < cols.size(); ++c) {
+				row.push_back(cols[c].toString());
+			}
+		}
+	}
+
+	return rows1;
+}
+
+ExcelSheet::Rows ExcelSheet::RangeAllSheet() const
+{
+	auto size = Size();
+	return Range(QRect(0, 0, size.width(), size.height()));
+}
+
 void ExcelSheet::ClearContentsSheet()
 {
-	if (sheet && !sheet->isNull()) {
-		QAxObject* cells = sheet->querySubObject("Cells");
-		if (cells && !cells->isNull()) {
-			cells->dynamicCall("ClearContents()");
-				// для полной очистки (данные + форматирование) dynamicCall("Clear()");
-			delete cells;
-		}
-		else QMbError("ExcelSheet::ClearContentsSheet invalid cells");
-	}
+	axuptr cells = sheet.querySubObject("Cells");
+	if (!cells) { parent.Error("cells is null"); return; }
+
+	cells->dynamicCall("ClearContents()");
 }
 
-ExcelWorkbook::ExcelWorkbook() {
-	qdbg << "ExcelWorkbook: ужасное говнище с утечками памяти, нужно переделать и убрать утечки памяти";
+ExcelWorkbook::ExcelWorkbook(ErrorWorker errorWorker):
+	IWorkbook(std::move(errorWorker))
+{
+
 }
 
-ExcelWorkbook::ExcelWorkbook(QString file) {
-	Open(file);
-	qdbg << "ExcelWorkbook: ужасное говнище с утечками памяти, нужно переделать и убрать утечки памяти";
+ExcelWorkbook::ExcelWorkbook(QString file, ErrorWorker errorWorker):
+	IWorkbook(std::move(errorWorker))
+{
+	auto error = Open(file);
+	if(!error.isEmpty()) Error(error);
 }
 
 ExcelWorkbook::~ExcelWorkbook() {
-	if(opened)
-		CloseNoSave();
-	qdbg << "ExcelWorkbook: ужасное говнище с утечками памяти, нужно переделать и убрать утечки памяти";
+	if(IsOpened()) CloseNoSave();
 }
 
-bool ExcelWorkbook::Open(QString file)
+QString ExcelWorkbook::Open(QString file)
 {
-	if(opened) CloseNoSave();
-	if(QFile(file).exists())
+	/// работу с QAxObject не требуется оборачивать в try-catch поскольку они не выбрасывают исключения,
+	/// а при ошибках отправляют сигналы
+
+	/// Вызовы querySubObject возвращают указатель на объект в куче!!! Нужно удалять!
+	/// Удобно использовать RAII axuptr!
+
+	if(!errorWorker)
 	{
-		excel = new QAxObject("Excel.Application", 0);
-		workbooks = excel->querySubObject("Workbooks");
-		wb = workbooks->querySubObject("Open(const QString&)", file);
-
-		if(!sheets.empty())
-		{
-			for(auto sh:sheets) delete sh;
-			sheets.clear();
-		}
-
-		int shC = SheetCount();
-		for(int i=1; i<=shC; i++)
-		{
-			ExcelSheet *sh = new ExcelSheet(wb->querySubObject("Worksheets")->querySubObject("Item(int)", i));
-			sheets.push_back(sh);
-		}
-		opened = true;
-		return true;
+		Error("ExcelWorkbook::Open, but errorWorker is null");
 	}
-	else QMbError("Open: file "+file+" not exists!");
-	return false;
+
+	if(excel_uptr) { ClearFields(); return "ExcelWorkbook::Open is aleady opened"; }
+	if(!sheets.empty()) { ClearFields(); return "ExcelWorkbook::Open sheets not empty"; }
+
+	if(not QFileInfo(file).isFile()) return file + " is not file";
+
+	excel_uptr = std::make_unique<QAxObject>("Excel.Application");
+
+	auto workbooks = excel_uptr->querySubObject("Workbooks"); // будет удалён за счёт парента
+	if(!workbooks) { ClearFields(); return "ExcelWorkbook::Open can't get workbooks"; }
+
+	workbook = workbooks->querySubObject("Open(const QString&)", file);
+	if(!workbook) { ClearFields(); return "ExcelWorkbook::Open can't get workbook"; }
+
+	auto __sheets = workbook->querySubObject("Worksheets");  // будет удалён за счёт парента
+	if(!__sheets) { ClearFields(); return "ExcelWorkbook::Open null sheets"; }
+
+	int shC = __sheets->property("Count").toInt();
+	for(int i=1; i<=shC; i++)
+	{
+		auto axSheet = __sheets->querySubObject("Item(int)", i); // будет удалён за счёт парента
+		if(!axSheet) { ClearFields(); return "ExcelWorkbook::Open can't get axSheet"; }
+
+		auto sheet = std::make_unique<ExcelSheet>(*axSheet, *this);
+
+		this->sheets.push_back(std::move(sheet));
+	}
+
+	return "";
 }
 
-void ExcelWorkbook::Save()
+QString ExcelWorkbook::Save()
 {
-	if(opened)
-	{
-		wb->dynamicCall("Save()");
-	}
+	if(!workbook) return "ExcelWorkbook::Save called for null workbook";
+
+	workbook->dynamicCall("Save()"); // всегда возвращает пустой вариант, проверять нечего
+
+	return "";
 }
 
-void ExcelWorkbook::CloseNoSave()
+QString ExcelWorkbook::CloseNoSave()
 {
-	if(opened)
-	{
-		wb->dynamicCall("Close(bool)", false);
-		excel->dynamicCall("Quit()");
-		delete excel;
-		excel = nullptr;
-		workbooks = nullptr;
-		wb = nullptr;
-		opened = false;
-	}
+	if(!excel_uptr) return "ExcelWorkbook::CloseNoSave called for null excel_uptr";
+	if(!workbook) return "ExcelWorkbook::CloseNoSave called for null workbook";
+
+	sheets.clear();
+
+	workbook->dynamicCall("Close(bool)", false);
+	excel_uptr->dynamicCall("Quit()");
+	ClearFields();
+
+	return "";
 }
 
-IExcelSheet * ExcelWorkbook::Sheet(int index) const {
+ISheet * ExcelWorkbook::Sheet(int index) const {
 	if(index >= 0 and index < (int)sheets.size())
-		return sheets[index];
+		return sheets[index].get();
 
-	QMbError("Invalid sheet index "+QSn(index));
 	return nullptr;
 }
 
@@ -135,63 +254,51 @@ QString ExcelWorkbook::ToStr() const
 {
 	QString ret;
 	int shC = SheetCount();
-	for(int shi = 1; shi<=shC; shi++)
+	for(int shi = 0; shi<shC; shi++)
 	{
-		IExcelSheet *sheet = Sheet(shi);
-		ret += sheet->Name() +  IExcelSheet::EndSheetName();
-		ret += sheet->AllRows() + IExcelSheet::EndSheet();
+		ISheet *sheet = Sheet(shi);
+		ret += sheet->Name() +  ISheet::EndSheetName;
+		ret += sheet->RangeAllSheet().ToString() + ISheet::EndSheet;
 	}
 
 	return ret;
 }
 
-void ExcelQStringSheet::Init(const QString &sheet)
+
+
+void QStringsSheet::Init(const QString &sheet)
 {
 	rows.clear();
-	name = sheet.left(sheet.indexOf(EndSheetName()));
-	QStringList rows_ = sheet.split(EndRow());
+	name = sheet.left(sheet.indexOf(EndSheetName));
+	QStringList rows_ = sheet.split(EndRow);
 	if(rows_.size())
 	{
-		rows_[0].remove(0,rows_[0].indexOf(EndSheetName()) + EndSheetName().length());
+		rows_[0].remove(0,rows_[0].indexOf(EndSheetName) + EndSheetName.length());
 		for(auto &r:rows_)
 		{
-			rows.push_back(r.split(EndCell()));
+			rows.push_back(r.split(EndCell));
 		}
 	}
 }
 
-QString ExcelQStringSheet::Cell(int col, int row) const
+QString QStringsSheet::Cell(int col, int row) const
 {
-	if(row > (int)rows.size() || col > rows[row-1].size())
-		QMbError("QString Cell(col=" + QSn(col) + ", row=" + QSn(row) + ")  out of boud");
-	return rows[row-1][col-1];
+	throw std::logic_error("QStringsSheet::Cell");
+	//if(row >= (int)rows.size() || col >= rows[row].size())
+		//parent.Error("QString Cell(col=" + QSn(col) + ", row=" + QSn(row) + ")  out of boud");
+	return rows[row][col];
 }
 
-QString ExcelQStringSheet::AllRows() const
+ExcelQStringWorkbook::ExcelQStringWorkbook(IWorkbook::ErrorWorker errorWorker):
+	IWorkbook(std::move(errorWorker))
 {
-	QString ret;
 
-	int countRows = rows.size();
-	if(rows.size())
-	{
-		int countCols = rows[0].size();
-
-		for(int r=0; r<countRows; r++)
-		{
-			for(int c=0; c<countCols; c++)
-			{
-				ret += rows[r][c] + EndCell();
-			}
-			ret += EndRow();
-		}
-	}
-	return ret;
 }
 
-IExcelSheet* ExcelQStringWorkbook::Sheet(int number) const
+ISheet* ExcelQStringWorkbook::Sheet(int number) const
 {
 	if(number > (int)sheetsPt.size())
-		QMbError("IExcelSheet* Sheet(number=" + QSn(number) + ") out of boud");
+		Error("IExcelSheet* Sheet(number=" + QSn(number) + ") out of boud");
 	return sheetsPt[number-1];
 }
 
@@ -200,14 +307,15 @@ QString ExcelQStringWorkbook::ToStr() const
 	QString ret;
 	for(auto &sh:sheets)
 	{
-		ret += sh.Name() +  IExcelSheet::EndSheetName();
-		ret += sh.AllRows() + IExcelSheet::EndSheet();
+		ret += sh.Name() +  ISheet::EndSheetName;
+		ret += sh.RangeAllSheet().ToString() + ISheet::EndSheet;
 	}
 	return ret;
 }
+
 void ExcelQStringWorkbook::FromStr(const QString &/*workBookAsStr*/)
 {
-	QMbError("ExcelQStringWorkbook::FromStr отключено, нужно реализовать вирт функцию");
+	IWorkbook::Error("ExcelQStringWorkbook::FromStr отключено, нужно реализовать вирт функцию");
 //	QStringList sheets_ { workBookAsStr.split(IExcelSheet::EndSheet()) };
 //	for(int i=0; i<sheets_.size(); i++)
 //		sheets.push_back(sheets_[i]);
@@ -245,7 +353,7 @@ int MyQExcelHasher::LoadFromHashedFile(QString fileName)
 		QString wbStr = fileData.readAll();
 		fileData.close();
 
-		ExcelQStringWorkbook *swb = new ExcelQStringWorkbook;
+		ExcelQStringWorkbook *swb = new ExcelQStringWorkbook([](const QString &text){ QMbError(text); });
 		wbPt = swb;
 		swb->FromStr(wbStr);
 	}
@@ -302,8 +410,8 @@ int MyQExcelHasher::InitFile(QString directory, QString fileName)
 		QString newFile = GetFileName(fileIndex);
 		Log("Hash not found, write new hash " + newFile);
 
-		ExcelWorkbook *ewb = new ExcelWorkbook;
-		if(ewb->Open(fileName))
+		ExcelWorkbook ewb([](const QString &text){ QMbError(text); });
+		if(ewb.Open(fileName).isEmpty())
 		{
 			if(file_hashes.open(QFile::Append))
 			{
@@ -318,11 +426,10 @@ int MyQExcelHasher::InitFile(QString directory, QString fileName)
 				if(fileData.open(QFile::WriteOnly))
 				{
 					QTextStream stream(&fileData);
-					stream << ewb->ToStr();
+					stream << ewb.ToStr();
 					fileData.close();
 
-					ewb->CloseNoSave();
-					delete ewb;
+					ewb.CloseNoSave();
 
 					return LoadFromHashedFile(dirHashedFiles.path() + "/" + newFile);
 				}
