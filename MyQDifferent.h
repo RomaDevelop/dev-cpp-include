@@ -60,8 +60,8 @@ struct Time_dhms
 
 QString MyQDifferent::ExePath()
 {
-	static QString path = QFileInfo(QCoreApplication::applicationFilePath()).path();
-	// альтернативой applicationFilePath() является QDir::currentPath(), но если программа запущена из Qt игнорирует /debug
+	static QString path = QCoreApplication::applicationDirPath();
+	// альтернативой applicationDirPath() является QDir::currentPath(), но если программа запущена из Qt игнорирует /debug
 	return path;
 }
 
