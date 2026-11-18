@@ -33,7 +33,8 @@ struct LaunchParams {
 
 private:
 	inline static std::vector<DeveloperData> developersData;
-	inline static DeveloperData notDeveloper {"not_developer", "not_developer", "not_developer", "not_developer"};
+	inline static DeveloperData notDeveloper { QStringLiteral("not_developer"), QStringLiteral("not_developer"),
+											   QStringLiteral("not_developer"), QStringLiteral("not_developer")};
 };
 
 //------------------------------------------------------------------------------------------------------------------------------------------
@@ -69,8 +70,7 @@ const LaunchParams::DeveloperData& LaunchParams::CurrentDeveloper()
 
 const QString &LaunchParams::SourcesPath()
 {
-	static QString str = CurrentDeveloper().sourcesPath;
-	return str;
+	return CurrentDeveloper().sourcesPath;
 }
 
 bool LaunchParams::LaunchedOnDevComp()
