@@ -48,12 +48,13 @@ class MyQTimer : public QTimer {
 public:
 
 	///\brief Асинхронный цикл выполняемый в потоке GUI
-	/// эквивалент for (int i = i_start; i < i_less_than; i++)
-	/// но выполняется через интервалы interval
-	/// to_do: сейчас таймеру просто ставится интервал, можно сделать версию с паузами между итерациями
-	inline static void For(int i_start, int i_less_than, int interval, QObject &parent,
-				  std::function<void(int &i)> iteration,
-				  std::function<void()> finishAction);
+	/// эквивалент for (int i = i_start; i < i_less_than; i++), но итерации выполняются через интервалы interval_ms
+	/// агрумент iteration должен быть не пуст
+	/// to_do: Сейчас таймеру просто ставится интервал, нужно сделать версию с паузами между итерациями,.
+	///		   Текущая версия отлично работает с нетяжётыми операциями, но если iteration будет выполнятся дольше interval_ms.
+	inline static void For(int i_start, int i_less_than, int interval_ms, QObject &parent,
+	                       std::function<void(int &i)> iteration,
+	                       std::function<void()> finishAction = {});
 
 	///\brief Отложенный вызов функции по времени или условию
 	/// Создает таймер с интервалом step_ms,
@@ -76,23 +77,47 @@ public:
 	}
 };
 
-void MyQTimer::For(int i_start, int i_less_than, int interval, QObject &parent,
+void MyQTimer::For(int i_start, int i_less_than, int interval_ms, QObject &parent,
 				   std::function<void (int &)> iteration, std::function<void ()> finishAction)
 {
-	auto iShPtr = std::make_shared<int>(i_start);
+	if (i_start >= i_less_than) // необходимо, иначе если передать i_start >= i_less_than, iteration выполнится 1 раз
+	{
+		if (finishAction) finishAction();
+		return;
+	}
+
+	/// Изначально i передавал в лямбду в shared_ptr, но оказывается это не нужно, все работает так.
+	/// (в mutable лямбде захваченная переменная i = i_start будет сохранять свое значение между вызовами)
 	QTimer *timer = new QTimer(&parent);
-	connect(timer, &QTimer::timeout, &parent, [iShPtr, i_less_than, iteration, finishAction, timer](){
-		auto &i = *iShPtr.get();
+	timer->setSingleShot(true); // Включен режим SingleShot, поэтому вызывать stop по окончанию не потребуется
+
+	/// Используется mutable-лямбда, т.е. счётчик i будет сохранять свое значение между срабатываниями таймена
+	connect(timer, &QTimer::timeout, timer,
+	        [
+	        i = i_start,
+	        i_less_than,
+	        interval_ms,
+	        iteration = std::move(iteration),
+	        finishAction = std::move(finishAction),
+	        timer
+	        ]() mutable
+	{
 		iteration(i);
 		i++;
-		if(i >= i_less_than)
+
+		if(i < i_less_than)
 		{
-			finishAction();
-			timer->stop();
+			timer->start(interval_ms);
+		}
+		else
+		{
+			if(finishAction) finishAction();
+			// Вызов timer->stop() - не треуется поскольку таймер в режиме SingleShot
 			timer->deleteLater();
 		}
 	});
-	timer->start(interval);
+
+	timer->start(interval_ms);
 }
 
 void MyQTimer::DeferredCall(int deferral_ms, int step_ms, QObject &parent,
