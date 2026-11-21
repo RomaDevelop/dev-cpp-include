@@ -38,9 +38,9 @@ bool IsDouble(const QStringType &stringVariable, T_double &value) { bool ok; val
 //--------------------------------------------------------------------------------------------------------------------------
 #define LastAddedWidget(Layout, Type) static_cast<Type*>(Layout->itemAt(Layout->count()-1)->widget())
 //--------------------------------------------------------------------------------------------------------------------------
-inline QString TimeFormat 					= QStringLiteral("hh:mm:ss");
-inline QString Time_hms 					= QStringLiteral("hh:mm:ss");
-inline QString Time_hm 						= QStringLiteral("hh:mm");
+inline QString TimeFormat_hm 				= QStringLiteral("hh:mm");
+inline QString TimeFormat_hms 				= QStringLiteral("hh:mm:ss");
+inline QString TimeFormat_hms_ms 			= QStringLiteral("hh:mm:ss.zzz");
 
 inline QString DateTimeFormat 				= QStringLiteral("yyyy.MM.dd hh:mm:ss");
 inline QString DateTimeFormat_ms 			= QStringLiteral("yyyy.MM.dd hh:mm:ss.zzz");
