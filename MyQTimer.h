@@ -7,25 +7,36 @@
 #include <functional>
 
 #include <QDebug>
+#include <QEventLoop>
 #include <QTimer>
 #include <QDateTime>
 
 //--------------------------------------------------------------------------------------------------------------------------
 
-///\brief MyQTimerPool is intended for use in one thread.
+///\brief Пул SingleShot таймеров для оптимизации выполнения отложенных задач в основном потоке.
+///\warning Класс предназначен для работы в одном потоке.
 struct MyQTimerPool
 {
 	MyQTimerPool() { }
 	~MyQTimerPool() { ClearTimers(); }
 
-	inline static void SingleShotSt(QObject *parent, int msec, std::function<void()> task);
+	///\brief Задача task должна быть выполнена через interval_ms
+	struct Task { uint interval_ms = 0; std::function<void()> task; };
+	using Tasks = std::vector<Task>;
 
-	using Tasks = std::vector<std::pair<int, std::function<void()>>>;
-	inline static void SingleShotsSt(QObject *parent, Tasks tasks);
-
+	///\brief Выделяет таймер из пула для выполнения задачи task через interval_ms
 	inline void SingleShot(QObject *parent, int msec, std::function<void()> function);
+	///\brief Выделяет циклом таймеры из пула для выполнения задач tasks
 	inline void SingleShots(QObject *parent, Tasks tasks);
+	///\brief Уничтожает все таймеры в пуле вызовом deleteLater для каждого
 	inline void ClearTimers();
+
+	///\brief Выделяет таймер из статического пула для выполнения задачи task через interval_ms
+	inline static void SingleShotSt(QObject *parent, int interval_ms, std::function<void()> task);
+	///\brief Выделяет циклом таймеры из статического пула для выполнения задач tasks
+	inline static void SingleShotsSt(QObject *parent, Tasks tasks);
+	///\brief Уничтожает все таймеры в статическом пуле вызовом deleteLater для каждого
+	inline static void ClearTimersSt();
 
 private:
 	std::set<QTimer*> allTimers;
@@ -34,11 +45,14 @@ private:
 	static MyQTimerPool& staticPool() { static MyQTimerPool pool; return pool; }
 };
 
+///\brief Альтернативный способ работы со статическим пулом таймеров
 struct MyQTimerPoolSt
 {
-	inline void SingleShot(QObject *parent, int msec, std::function<void()> function) { MyQTimerPool::SingleShotSt(parent, msec, std::move(function)); }
 	using Tasks = MyQTimerPool::Tasks;
-	inline void SingleShots(QObject *parent, Tasks tasks){ MyQTimerPool::SingleShotsSt(parent, std::move(tasks)); }
+
+	inline void SingleShot(QObject *parent, int msec, std::function<void()> function);
+	inline void SingleShots(QObject *parent, Tasks tasks);
+	inline void ClearTimers();
 };
 
 //--------------------------------------------------------------------------------------------------------------------------
@@ -48,11 +62,16 @@ class MyQTimer : public QTimer {
 public:
 
 	///\brief Асинхронный цикл выполняемый в потоке GUI
-	/// эквивалент for (int i = i_start; i < i_less_than; i++), но итерации выполняются через интервалы interval_ms
-	/// агрумент iteration должен быть не пуст
-	/// to_do: Сейчас таймеру просто ставится интервал, нужно сделать версию с паузами между итерациями,.
-	///		   Текущая версия отлично работает с нетяжётыми операциями, но если iteration будет выполнятся дольше interval_ms.
+	/// Эквивалент for (int i = i_start; i < i_less_than; i++), но итерации выполняются через интервалы interval_ms.
+	/// Агрумент iteration должен быть не пуст.
+	/// Если цикл будет прерван из-за уничтожения parent, finishAction не будет выполнено.
 	inline static void For(int i_start, int i_less_than, int interval_ms, QObject &parent,
+	                       std::function<void(int &i)> iteration,
+	                       std::function<void()> finishAction = {});
+
+	///\brief Аналогично функции MyQTimer::For, но блокирует выполнение кода ниже до завершения работы цикла.
+	/// Использует для блокировки QEventLoop и вызывает MyQTimer::For.
+	inline static void ForBlocking(int i_start, int i_less_than, int interval_ms, QObject &parent,
 	                       std::function<void(int &i)> iteration,
 	                       std::function<void()> finishAction = {});
 
@@ -120,11 +139,30 @@ void MyQTimer::For(int i_start, int i_less_than, int interval_ms, QObject &paren
 	timer->start(interval_ms);
 }
 
+void MyQTimer::ForBlocking(int i_start, int i_less_than, int interval_ms, QObject & parent,
+                    std::function<void (int &)> iteration, std::function<void ()> finishAction)
+{
+	QEventLoop loop;
+
+	// Страховка: если parent умрет раньше окончания цикла, loop будет завершен
+	QObject::connect(&parent, &QObject::destroyed, &loop, &QEventLoop::quit);
+
+	MyQTimer::For(i_start, i_less_than, interval_ms, parent, std::move(iteration),
+	              [finishAction = std::move(finishAction), &loop]()
+	{
+		if(finishAction) finishAction();
+		loop.quit();
+	});
+
+	loop.exec();
+}
+
 void MyQTimer::DeferredCall(int deferral_ms, int step_ms, QObject &parent,
-					std::function<bool ()> checkFn, std::function<void ()> call)
+                            std::function<bool ()> checkFn, std::function<void ()> call)
 {
 	QTimer *timer = new QTimer(&parent);
 	QDateTime start = QDateTime::currentDateTime();
+
 	connect(timer, &QTimer::timeout, &parent, [checkFn, call, timer, start, deferral_ms](){
 		if(checkFn() or start.msecsTo(QDateTime::currentDateTime()) > deferral_ms)
 		{
@@ -133,22 +171,14 @@ void MyQTimer::DeferredCall(int deferral_ms, int step_ms, QObject &parent,
 			timer->deleteLater();
 		}
 	});
+
 	timer->start(step_ms);
-}
-
-void MyQTimerPool::SingleShotSt(QObject *parent, int msec, std::function<void ()> task)
-{
-	staticPool().SingleShot(parent, msec, std::move(task));
-}
-
-void MyQTimerPool::SingleShotsSt(QObject *parent, MyQTimerPool::Tasks tasks)
-{
-	staticPool().SingleShots(parent, std::move(tasks));
 }
 
 void MyQTimerPool::SingleShot(QObject *parent, int msec, std::function<void ()> function)
 {
 	QTimer *timer;
+
 	if(freeTimers.empty())
 	{
 		timer = new QTimer(parent);
@@ -162,20 +192,22 @@ void MyQTimerPool::SingleShot(QObject *parent, int msec, std::function<void ()> 
 		freeTimers.erase(freeTimers.begin());
 		timer->setParent(parent);
 	}
+
 	QObject::connect(timer, &QTimer::timeout, [this, timer, function = std::move(function)](){
 		function();
 		timer->setParent(nullptr);
 		QObject::disconnect(timer, &QTimer::timeout, nullptr, nullptr);
 		freeTimers.insert(timer);
 	});
+
 	timer->start(msec);
 }
 
 void MyQTimerPool::SingleShots(QObject *parent, MyQTimerPool::Tasks tasks)
 {
-	for(auto &[msec, function]:tasks)
+	for(auto &task:tasks)
 	{
-		SingleShot(parent, msec, std::move(function));
+		SingleShot(parent, task.interval_ms, std::move(task.task));
 	}
 }
 
@@ -188,6 +220,36 @@ void MyQTimerPool::ClearTimers()
 	{
 		timer->deleteLater();
 	}
+}
+
+void MyQTimerPool::SingleShotSt(QObject * parent, int interval_ms, std::function<void ()> task)
+{
+	staticPool().SingleShot(parent, interval_ms, std::move(task));
+}
+
+void MyQTimerPool::SingleShotsSt(QObject * parent, MyQTimerPool::Tasks tasks)
+{
+	staticPool().SingleShots(parent, std::move(tasks));
+}
+
+void MyQTimerPool::ClearTimersSt()
+{
+	staticPool().ClearTimers();
+}
+
+void MyQTimerPoolSt::SingleShot(QObject * parent, int msec, std::function<void ()> function)
+{
+	MyQTimerPool::SingleShotSt(parent, msec, std::move(function));
+}
+
+void MyQTimerPoolSt::SingleShots(QObject * parent, MyQTimerPoolSt::Tasks tasks)
+{
+	MyQTimerPool::SingleShotsSt(parent, std::move(tasks));
+}
+
+void MyQTimerPoolSt::ClearTimers()
+{
+	MyQTimerPool::ClearTimersSt();
 }
 
 //--------------------------------------------------------------------------------------------------------------------------
