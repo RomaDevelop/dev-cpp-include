@@ -149,7 +149,7 @@ QString Time_dhms::ToString() const
 	{
 		if(!res.isEmpty()) res.append(" + ");
 
-		res.append(QTime(h,m,s).toString(TimeFormat));
+		res.append(QTime(h,m,s).toString(TimeFormat_hms));
 	}
 	return res;
 }
