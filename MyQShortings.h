@@ -50,6 +50,7 @@ inline QString DateTimeFormatForFileName_ms = QStringLiteral("yyyy.MM.dd hh-mm-s
 inline QString DateFormat 					= QStringLiteral("yyyy.MM.dd");
 
 inline QString DateFormat_rus 				= QStringLiteral("dd MMM yyyy");
+inline QString DateFormat_rus_ddd			= QStringLiteral("dd MMM yyyy (ddd)");
 inline QString DateTimeFormat_rus 			= QStringLiteral("dd MMM yyyy hh:mm:ss");
 inline QString DateTimeFormat_rus_ddd 		= QStringLiteral("dd MMM yyyy (ddd) hh:mm:ss");
 //--------------------------------------------------------------------------------------------------------------------------
