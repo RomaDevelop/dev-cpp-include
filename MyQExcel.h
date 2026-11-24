@@ -42,6 +42,8 @@ public:
 	inline static QString EndSheet = QStringLiteral("[endSheet]");
 };
 
+///\warning Экземпляры реализаций типа ExcelWorkbook привязываются к потоку создания (COM STA).
+/// Создание, вызов методов и удаление такого объекта должны выполняться строго в одном потоке.
 class IWorkbook
 {
 public:
@@ -114,14 +116,16 @@ public:
 	virtual Rows RangeAllSheet() const override { throw std::logic_error("QStringsSheet RangeAllSheet"); }
 };
 
+///\warning Экземпляры класса привязываются к потоку создания (COM STA).
+/// Создание, вызов методов и удаление объекта должны выполняться строго в одном потоке.
 class ExcelWorkbook: public IWorkbook
 {
-	// Объект экселя. Если не пут - значит книга открыта.
+	// Объект экселя. Если не пуст - значит книга открыта.
 	QAxObjectUptr excel_uptr {};
-	QAxObject* workbook {}; // будет залет за счёт parent-а excel_uptr
+	QAxObject* workbook {}; // будет удалён за счёт parent-а
 	std::vector<std::unique_ptr<ExcelSheet>> sheets;
 
-	void ClearFields()
+	void Clear()
 	{
 		sheets.clear();
 		workbook = {};

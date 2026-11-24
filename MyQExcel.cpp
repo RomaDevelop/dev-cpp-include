@@ -1,5 +1,7 @@
 #include "MyQExcel.h"
 
+#include <objbase.h>
+
 #include <QCryptographicHash>
 #include <QFile>
 #include <QDir>
@@ -163,18 +165,31 @@ void ExcelSheet::ClearContentsSheet()
 ExcelWorkbook::ExcelWorkbook(ErrorWorker errorWorker):
 	IWorkbook(std::move(errorWorker))
 {
-
+	// Инициализация COM в режиме STA для работы QAxObject в текущем потоке.
+	// Важно: требует парного вызова CoUninitialize() строго ПОСЛЕ уничтожения всех QAxObject.
+	CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 }
 
 ExcelWorkbook::ExcelWorkbook(QString file, ErrorWorker errorWorker):
 	IWorkbook(std::move(errorWorker))
 {
+	// Инициализация COM в режиме STA для работы QAxObject в текущем потоке.
+	// Важно: требует парного вызова CoUninitialize() строго ПОСЛЕ уничтожения всех QAxObject.
+	CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
 	auto error = Open(file);
 	if(!error.isEmpty()) Error(error);
 }
 
-ExcelWorkbook::~ExcelWorkbook() {
+ExcelWorkbook::~ExcelWorkbook()
+{
 	if(IsOpened()) CloseNoSave();
+
+	// уничтожение QAxObject, нужно делать обязательно до CoUninitialize
+	excel_uptr.reset();
+
+	// Завершение работы с COM в текущем потоке (освобождает ресурсы и позволяет процессу Excel корректно закрыться).
+	CoUninitialize();
 }
 
 QString ExcelWorkbook::Open(QString file)
@@ -190,27 +205,29 @@ QString ExcelWorkbook::Open(QString file)
 		Error("ExcelWorkbook::Open, but errorWorker is null");
 	}
 
-	if(excel_uptr) { ClearFields(); return "ExcelWorkbook::Open is aleady opened"; }
-	if(!sheets.empty()) { ClearFields(); return "ExcelWorkbook::Open sheets not empty"; }
+	if(excel_uptr) { Clear(); return "ExcelWorkbook::Open error: is aleady opened"; }
+	if(!sheets.empty()) { Clear(); return "ExcelWorkbook::Open error: sheets not empty"; }
 
 	if(not QFileInfo(file).isFile()) return file + " is not file";
 
 	excel_uptr = std::make_unique<QAxObject>("Excel.Application");
 
+	if(excel_uptr->isNull()) { Clear(); return "ExcelWorkbook::Open error: can't init Excel.Application"; }
+
 	auto workbooks = excel_uptr->querySubObject("Workbooks"); // будет удалён за счёт парента
-	if(!workbooks) { ClearFields(); return "ExcelWorkbook::Open can't get workbooks"; }
+	if(!workbooks) { Clear(); return "ExcelWorkbook::Open error: can't get workbooks"; }
 
 	workbook = workbooks->querySubObject("Open(const QString&)", file);
-	if(!workbook) { ClearFields(); return "ExcelWorkbook::Open can't get workbook"; }
+	if(!workbook) { Clear(); return "ExcelWorkbook::Open error: can't get workbook"; }
 
 	auto __sheets = workbook->querySubObject("Worksheets");  // будет удалён за счёт парента
-	if(!__sheets) { ClearFields(); return "ExcelWorkbook::Open null sheets"; }
+	if(!__sheets) { Clear(); return "ExcelWorkbook::Open error: null sheets"; }
 
 	int shC = __sheets->property("Count").toInt();
 	for(int i=1; i<=shC; i++)
 	{
 		auto axSheet = __sheets->querySubObject("Item(int)", i); // будет удалён за счёт парента
-		if(!axSheet) { ClearFields(); return "ExcelWorkbook::Open can't get axSheet"; }
+		if(!axSheet) { Clear(); return "ExcelWorkbook::Open can't get axSheet"; }
 
 		auto sheet = std::make_unique<ExcelSheet>(*axSheet, *this);
 
@@ -238,7 +255,7 @@ QString ExcelWorkbook::CloseNoSave()
 
 	workbook->dynamicCall("Close(bool)", false);
 	excel_uptr->dynamicCall("Quit()");
-	ClearFields();
+	Clear();
 
 	return "";
 }
