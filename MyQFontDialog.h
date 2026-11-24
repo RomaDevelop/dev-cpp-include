@@ -99,19 +99,21 @@ MyQFontDialog::Result MyQFontDialog::GetFont(const QFont &startFont, QString cap
 
     QVBoxLayout *vloPreview = new QVBoxLayout;
     QLabel *labelPreview = new QLabel;
-    labelPreview->setAlignment(Qt::AlignCenter);
-    labelPreview->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    labelPreview->setFrameShape(QFrame::StyledPanel);
-    labelPreview->setFrameShadow(QFrame::Sunken);
-    labelPreview->setAutoFillBackground(true);
-    labelPreview->setMargin(6);
-
-    QPalette previewPalette = labelPreview->palette();
-    previewPalette.setColor(QPalette::Window, previewPalette.color(QPalette::Base));
-    labelPreview->setPalette(previewPalette);
     vloPreview->addWidget(new QLabel(QStringLiteral("Preview")));
     vloPreview->addWidget(labelPreview, 1);
     gridMain->addLayout(vloPreview, 1, 1, 1, 2);
+
+	// Настройка labelPreview
+	labelPreview->setAlignment(Qt::AlignCenter);
+	labelPreview->setTextInteractionFlags(Qt::TextSelectableByMouse);
+	labelPreview->setFrameShape(QFrame::StyledPanel);
+	labelPreview->setFrameShadow(QFrame::Sunken);
+	labelPreview->setAutoFillBackground(true);
+	labelPreview->setMargin(6);
+	// выставляет цвет фона labelPreview в QPalette::Base (цвет фона текстовых редакторов)
+	QPalette previewPalette = labelPreview->palette();
+	previewPalette.setColor(QPalette::Window, previewPalette.color(QPalette::Base));
+	labelPreview->setPalette(previewPalette);
 
     gridMain->setColumnStretch(0, 2);
     gridMain->setColumnStretch(1, 1);
