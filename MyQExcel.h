@@ -8,14 +8,50 @@
 #include <QAxObject>
 #include <QTextBrowser>
 
-#include "MyQShortings.h"
+using QAxObject_uptr = std::unique_ptr<QAxObject>;
 
-using QAxObjectUptr = std::unique_ptr<QAxObject>;
+namespace MyQAx {
+
+	///\brief RAII-обёртка над умным указателем на QAxObject с поддержкой неявного приведения к сырому указателю.
+	///
+	/// Структура обеспечивает эксклюзивное владение COM-объектом ActiveX через QAxObjectUptr
+	/// (запрещая копирование и разрешая только перемещение) и упрощает работу с API Qt/ActiveX
+	/// (например, с QAxBase::dynamicCall) за счёт прозрачного преобразования в QAxObject*.
+	///
+	/// Использование:
+	/// axuptr cell = sheet.querySubObject("Cells(int,int)", row, col); // querySubObject создёт объекты в куче.
+	/// Созданный объект захвачен в axuptr и будет автоматически уничтожен при выходе cell из области видимости.
+	struct axuptr
+	{
+		QAxObject_uptr uptr;
+
+		axuptr() noexcept = default;
+		axuptr(QAxObject* ptr) noexcept : uptr(ptr) { }
+		~axuptr() = default;
+
+		// Разрешаем только перемещение, запрещаем случайное копирование
+		axuptr(axuptr&&) noexcept = default;
+		axuptr& operator=(axuptr&&) noexcept = default;
+		axuptr(const axuptr&) = delete;
+		axuptr& operator=(const axuptr&) = delete;
+
+		// Безопасное приведение к bool (защита от неявного каста в int)
+		explicit operator bool() const noexcept { return static_cast<bool>(uptr); }
+
+		QAxObject* operator->() const noexcept { return uptr.get(); }
+		QAxObject& operator*() const noexcept { return *uptr; }
+
+		// Удобный доступ к сырому указателю (например, для передачи в dynamicCall)
+		QAxObject* get() const noexcept { return uptr.get(); }
+		operator QAxObject*() const noexcept { return uptr.get(); }
+	};
+}
 
 struct MyQExcelRows
 {
 	std::vector<QStringList> data;
 	QString ToString();
+	QVariantList ToQVariantList() const;
 };
 
 class ISheet
@@ -24,15 +60,22 @@ public:
 	virtual ~ISheet() = default;
 
 	virtual QString Name() const = 0;
+
 	/// col, row нумерация с 0
-	virtual QString Cell(int col, int row) const = 0;
+	virtual QString Cell_(int row, int col) const = 0;
 	/// col, row нумерация с 0
-	virtual void SetCell(int col, int row, const QString &value) = 0;
+	virtual void SetCell_(int row, int col, const QString &value) = 0;
 
 	using Rows = MyQExcelRows;
 
+	/// в rect.x и rect.y нумерация с 0
 	virtual Rows Range(const QRect &rect) const = 0;
 	virtual Rows RangeAllSheet() const = 0;
+
+	/// colFrom, rowFrom нумерация с 0
+	virtual void SetRange(const MyQExcelRows &rows, int rowFrom, int colFrom) = 0;
+
+	virtual std::optional<QPoint> Find(const QString& searchText) const = 0;
 
 	virtual void ClearContentsSheet() = 0;
 
@@ -58,15 +101,7 @@ public:
 
 
 	ErrorWorker errorWorker;
-	void Error(const QString &text) const
-	{
-		if(errorWorker) errorWorker(text);
-		else
-		{
-			qdbg << "IWorkbook::ErrorWorker is null";
-			qdbg << "Error:" << text;
-		}
-	}
+	void Error(const QString &text) const;
 };
 
 class ExcelSheet: public ISheet
@@ -85,14 +120,20 @@ public:
 	QSize Size() const;
 
 	/// col, row нумерация с 0
-	virtual QString Cell(int col, int row) const override;
+	virtual QString Cell_(int row, int col) const override;
 	/// col, row нумерация с 0
-	virtual void SetCell(int col, int row, const QString &value) override;
+	virtual void SetCell_(int row, int col, const QString &value) override;
 
 	virtual Rows Range(const QRect &rect) const override;
 	virtual Rows RangeAllSheet() const override;
 
-	void ClearContentsSheet() override;
+	virtual void SetRange(const MyQExcelRows &rows, int rowFrom, int colFrom) override;
+
+	virtual std::optional<QPoint> Find(const QString& searchText) const override;
+
+	virtual void ClearContentsSheet() override;
+
+	void Error(const QString &text) { parent.Error(text); }
 };
 
 class QStringsSheet: public ISheet
@@ -108,9 +149,9 @@ public:
 
 	QString Name() const override { return name; }
 	/// col, row нумерация с 0
-	QString Cell(int col, int row) const override;
+	QString Cell_(int row, int col) const override;
 	/// col, row нумерация с 0
-	void SetCell(int col, int row, const QString &value) override { rows[row][col] = value; }
+	void SetCell_(int row, int col, const QString &value) override { rows[row][col] = value; }
 
 	virtual Rows Range(const QRect &/*rect*/) const override { throw std::logic_error("QStringsSheet Range"); }
 	virtual Rows RangeAllSheet() const override { throw std::logic_error("QStringsSheet RangeAllSheet"); }
@@ -121,7 +162,7 @@ public:
 class ExcelWorkbook: public IWorkbook
 {
 	// Объект экселя. Если не пуст - значит книга открыта.
-	QAxObjectUptr excel_uptr {};
+	QAxObject_uptr excel_uptr {};
 	QAxObject* workbook {}; // будет удалён за счёт parent-а
 	std::vector<std::unique_ptr<ExcelSheet>> sheets;
 
@@ -147,11 +188,12 @@ public:
 	QString Open(QString file);
 	bool IsOpened() { return bool(excel_uptr); }
 
-	QString Save();
+	bool Save();
 
 	QString CloseNoSave();
 
 	ISheet* Sheet(int index) const override;
+	ISheet* Sheet(const QString &name) const;
 	int SheetCount() const override { return sheets.size(); }
 	QString ToStr() const override ;
 };
@@ -187,11 +229,7 @@ public:
 
 	int InitFile(QString directory, QString fileName);
 
-	void Log(const QString &str)
-	{
-		qDebug() << str;
-		if(labelForMsgs) *labelForMsgs = str;
-	}
+	void Log(const QString &str);
 
 	enum errors { noError, unknown, cantCrDir, cantOpenExcelFile, cantOpenFileHashes, cantOpenFileHash,
 				  cantOpenFileNew, cantOpenNewFileHash };
