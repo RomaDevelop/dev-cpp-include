@@ -23,12 +23,12 @@ namespace CodeKeyWords
 	const char quatsSymbol2 = '\"';
 	const int quatsSymbolLength = 1;
 
-	const QString true_str = "true";
-	const QString false_str = "false";
+	const QString true_str = QStringLiteral("true");
+	const QString false_str = QStringLiteral("false");
 
 	const QString trueOrFalse = CodeKeyWords::true_str + "|" + CodeKeyWords::false_str;
 
-	const QString commentMarker = "//";
+	const QString commentMarker = QStringLiteral("//");
 
 	const QChar dot = '.';
 	const QChar comma = ',';
@@ -40,20 +40,19 @@ namespace CodeKeyWords
 
 	const QChar diapasonSplitter = '-';
 
-	constexpr std::string_view for_ = "for";
-	constexpr std::string_view for_starter = "for (";
+	const QString for_ = QStringLiteral("for");
+	const QString for_starter = QStringLiteral("for (");
 
-	constexpr std::string_view binCodePrefix = "0b";
-	constexpr std::string_view hexCodePrefix = "0x";
+	const QString binCodePrefix = "0b"; // длина префиксов должна совпадать!
+	const QString hexCodePrefix = "0x"; // длина префиксов должна совпадать!
 	const int encodingPrefixSize = binCodePrefix.size();
-	static_assert (binCodePrefix.size() == hexCodePrefix.size(), "encodingPrefixSizes are different");
 
 	namespace Encodings
 	{
-		inline const char * bin = "bin";
-		inline const char * dec = "dec";
-		inline const char * hex = "hex";
-		inline QStringList AllEncodings() { return {bin, dec, hex}; }
+		inline const QString bin = QStringLiteral("bin");
+		inline const QString dec = QStringLiteral("dec");
+		inline const QString hex = QStringLiteral("hex");
+		inline const QStringList AllEncodings() { return {bin, dec, hex}; }
 	}
 
 	const std::set<QChar> hexSymbols { '0','1','2','3','4','5','6','7','8','9','0','a','b','c','d','e','f' };

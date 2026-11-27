@@ -77,7 +77,7 @@ private:
 	inline void Copy(bool cut);
 	inline void Paste();
 	inline void ReplaceForCopyPaste(QString &text, bool copy);
-	inline static const char *nullItemMarker = "null_item";
+	inline static QString nullItemMarker = QStringLiteral("null_item");
 	const std::vector<std::pair<QString, QString>> replaces {
 		{"\"", "_mqtw_q_"},
 		{"\t", "_mqtw_t_"},

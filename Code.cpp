@@ -258,7 +258,7 @@ QStringList Code::CommandToWordsNorm(QString command, bool canContainCommandSpli
 
 std::optional<Statement> ForStatementParsing(const QStringRef &statementStr)
 {
-	if (!MyQString::StartsWith(statementStr, CodeKeyWords::for_starter)) return std::nullopt;
+	if (!statementStr.startsWith(CodeKeyWords::for_starter)) return std::nullopt;
 
 	// Подчсёт скобок чтобы найти конец "for (...)"
 	int brackets = 0;
@@ -713,7 +713,7 @@ bool Code::IsBinCode(const QString & str)
 {
 	if(str.size() >= 3)
 	{
-		if(str.startsWith(CodeKeyWords::binCodePrefix.data()))
+		if(str.startsWith(CodeKeyWords::binCodePrefix))
 		{
 			for(int i=CodeKeyWords::encodingPrefixSize; i<str.size(); i++)
 				if(str[i] != '0' && str[i] != '1')
@@ -728,7 +728,7 @@ bool Code::IsHexCode(const QString & str)
 {
 	if(str.size() >= 3)
 	{
-		if(str.startsWith(CodeKeyWords::hexCodePrefix.data()))
+		if(str.startsWith(CodeKeyWords::hexCodePrefix))
 		{
 			for(int i=CodeKeyWords::encodingPrefixSize; i<str.size(); i++)
 				if(CodeKeyWords::hexSymbols.count(str[i].toLower()) == 0)
@@ -1066,9 +1066,10 @@ QString LogFunction::GetTexts(int count)
 	auto it = textsInTestMode.end();
 	for(int i=0; i<count; i++) --it;
 	for (int i = 0; i < count; ++i) {
-		text += *it;
+		text += *it + ", ";
 		++it;
 	}
+	text.chop(2);
 	return text;
 }
 
